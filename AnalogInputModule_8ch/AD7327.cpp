@@ -45,11 +45,11 @@ AD7327::AD7327(byte ADCChipSelect) {
 void AD7327::readADC(){
   SPI.beginTransaction(SPISettings(SPI_speed, MSBFIRST, SPI_MODE2));
   for (int i = 0; i < nChannelsToRead; i++) {
-    digitalWrite(ChipSelect, LOW); // take the Chip Select pin low to select the ADC.
+    digitalWriteFast(ChipSelect, LOW); // take the Chip Select pin low to select the ADC.
     analogData.uint16[ADChannelMap[i]] = SPI.transfer16(0);
     // Next, loop the CS digitalWrite to stall for less than 1 microsecond. Doing this prevents occasional ~5mV conversion artifacts on ch2-8.
     for (int j = 0; j < 10; j++) { 
-      digitalWrite(ChipSelect, HIGH); // take the Chip Select pin high to de-select the ADC.
+      digitalWriteFast(ChipSelect, HIGH); // take the Chip Select pin high to de-select the ADC.
     }
     bitClear(analogData.uint16[ADChannelMap[i]], 15); 
     bitClear(analogData.uint16[ADChannelMap[i]], 14); 
@@ -120,9 +120,9 @@ void AD7327::setRange(byte channel, byte newRangeIndex) { // See AD7327 datashee
 
 void AD7327::writeRegisterBuffer() {
   SPI.beginTransaction(SPISettings(SPI_speed, MSBFIRST, SPI_MODE2));
-  digitalWrite(ChipSelect, LOW);
+  digitalWriteFast(ChipSelect, LOW);
   SPI.transfer16(registerBuffer);
-  digitalWrite(ChipSelect, HIGH);
+  digitalWriteFast(ChipSelect, HIGH);
   SPI.endTransaction();
 }
 

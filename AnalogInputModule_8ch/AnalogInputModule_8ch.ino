@@ -2,7 +2,7 @@
   ----------------------------------------------------------------------------
 
   This file is part of the Sanworks Bpod repository
-  Copyright (C) 2017 Sanworks LLC, Stony Brook, New York, USA
+  Copyright (C) 2018 Sanworks LLC, Stony Brook, New York, USA
 
   ----------------------------------------------------------------------------
 
@@ -18,9 +18,9 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 */
-// Analog Module firmware v4.0.0
+// Analog Module firmware v2
 // Federico Carnevale, October 2016
-// Revised by Josh Sanders, May 2017
+// Revised by Josh Sanders, April 2018
 
 // ** DEPENDENCIES YOU NEED TO INSTALL FIRST **
 
@@ -39,11 +39,8 @@
 #include <SdFat.h> // Library for microSD
 SdFatSdioEX SD;
 
-#define SERIAL_TX_BUFFER_SIZE 256
-#define SERIAL_RX_BUFFER_SIZE 256
-
 // Module setup
-unsigned long FirmwareVersion = 1;
+unsigned long FirmwareVersion = 2;
 char moduleName[] = "AnalogIn"; // Name of module for manual override UI and state machine assembler
 
 AD7327 AD(39); // Create AD, an AD7327 ADC object.
@@ -124,6 +121,17 @@ union { // Union for conversion of calibration values to <-> from SD card
     byte byteArray[2];
     int16_t int16;
 } typeBuffer;
+union { // Union for streaming adc values to USB
+    byte byteArray[16000];
+    uint16_t uint16[8000];
+} usbBufferA;
+union { // Union for streaming adc values to USB (used to capture data while USBBufferA is being transmitted + vice versa)
+    byte byteArray[16000];
+    uint16_t uint16[8000];
+} usbBufferB;
+byte currentUSBBuffer = 0; // Which USB buffer is currently being used to capture data (0 or 1)
+uint16_t usbBufferPos[2] = {0}; // Current position in each USB buffer (number of samples captured)
+boolean usbBufferFlag = false; // True if new data is available in the current USB buffer
 
 // Error messages stored in flash.
 #define error(msg) sd.errorHalt(F(msg))
@@ -149,7 +157,6 @@ void setup() {
   hardwareTimer.begin(handler, timerPeriod); // hardwareTimer is an interval timer object - Teensy 3.6's hardware timer
 }
 
-
 void loop() {
   if (writeFlag) { // If data is available to be written to microSD
     if (currentBuffer == 0) { // If the data was loaded into buffer 0
@@ -162,6 +169,17 @@ void loop() {
       writeBuffer2Pos = 0;
     }
     writeFlag = false;
+  }
+  if (usbBufferFlag) {
+    currentUSBBuffer = 1-currentUSBBuffer;
+    usbBufferPos[currentUSBBuffer] = 0;
+    if (currentUSBBuffer == 1) {
+      USBCOM.writeByteArray(usbBufferA.byteArray, usbBufferPos[0]*2);
+    } else {
+      USBCOM.writeByteArray(usbBufferB.byteArray, usbBufferPos[1]*2);
+    }
+    Serial.flush();
+    usbBufferFlag = false;
   }
 }
 
@@ -466,14 +484,26 @@ void handler(void) {
     LogData();
   } 
   if (StreamSignalToUSB) { // Stream data to USB
-    USBCOM.writeByte('R');
-    for (int i = 0; i < nActiveChannels; i++) {
-      if (streamChan2USB[i]) {
-        USBCOM.writeUint16(AD.analogData.uint16[i]);
-      }
+    if (currentUSBBuffer == 0) {
+      usbBufferA.uint16[usbBufferPos[currentUSBBuffer]] = 'R';
+    } else {
+      usbBufferB.uint16[usbBufferPos[currentUSBBuffer]] = 'R';
     }
-    USBCOM.flush();
+    usbBufferPos[currentUSBBuffer]++; 
+    for (int i = 0; i < nActiveChannels; i++) {
+        if (streamChan2USB[i]) {
+          if (currentUSBBuffer == 0) {
+            usbBufferA.uint16[usbBufferPos[0]] = AD.analogData.uint16[i];
+            usbBufferPos[0]++;
+          } else {
+            usbBufferB.uint16[usbBufferPos[1]] = AD.analogData.uint16[i];
+            usbBufferPos[1]++;
+          }
+        }
+    }
+    usbBufferFlag = true;
   }
+
   if (StreamSignalToModule) {
     OutputStreamCOM.writeByte(streamPrefix);
     for (int i = 0; i < nActiveChannels; i++) {
