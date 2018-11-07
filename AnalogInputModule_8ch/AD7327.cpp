@@ -48,7 +48,7 @@ void AD7327::readADC(){
     digitalWriteFast(ChipSelect, LOW); // take the Chip Select pin low to select the ADC.
     analogData.uint16[ADChannelMap[i]] = SPI.transfer16(0);
     // Next, loop the CS digitalWrite to stall for less than 1 microsecond. Doing this prevents occasional ~5mV conversion artifacts on ch2-8.
-    for (int j = 0; j < 10; j++) { 
+    for (int j = 0; j < 50; j++) { 
       digitalWriteFast(ChipSelect, HIGH); // take the Chip Select pin high to de-select the ADC.
     }
     bitClear(analogData.uint16[ADChannelMap[i]], 15); 
@@ -144,4 +144,3 @@ void AD7327::setControlRegister() {
   bitSet(registerBuffer, 3); // Set sequencer to "consecutive" mode (see AD7327 datasheet table 12)
   writeRegisterBuffer();
 }
-
