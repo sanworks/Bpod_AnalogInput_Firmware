@@ -59,8 +59,8 @@ void AD7327::readADC(){
 }
 
 void AD7327::setNchannels(byte nChannels) {
-  nChannelsToRead = nChannels;
-  setControlRegister();
+  // nChannelsToRead = nChannels;
+  // setControlRegister();
 }
 
 void AD7327::setRange(byte channel, byte newRangeIndex) { // See AD7327 datasheet p.24

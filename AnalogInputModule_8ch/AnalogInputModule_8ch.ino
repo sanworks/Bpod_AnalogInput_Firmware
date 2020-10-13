@@ -239,6 +239,14 @@ void handler(void) {
           returnModuleInfo();
         } 
       break;
+      case 254: // Relay test byte from USB to echo module, or from echo module back to USB 
+        if (opSource == 0) {
+          OutputStreamCOM.writeByte(254);
+        }
+        if (opSource == 2) {
+          USBCOM.writeByte(254);
+        }
+      break;
 
       case 'S': // Start/Stop data streaming
         inByte = readByteFromSource(opSource);
@@ -557,4 +565,3 @@ void returnModuleInfo() {
   StateMachineCOM.writeCharArray(moduleName, sizeof(moduleName) - 1); // Module name
   StateMachineCOM.writeByte(0);
 }
-
