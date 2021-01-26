@@ -300,7 +300,7 @@ void handler(void) {
           USBCOM.writeByte(1); // Send confirm byte
         }
       break;
-
+      
       case 'C': // Set subset of channels to stream raw data (USB and module)
         if (opSource == 0) {
           USBCOM.readByteArray(streamChan2USB, nPhysicalChannels);
@@ -370,17 +370,17 @@ void handler(void) {
             LoggingDataToSD = false;
             while (writeFlag) {};
             DataFile.seek(0);
-            if (nSamplesAcquired*2 > sdReadBufferSize) {
+            if (nSamplesAcquired*nActiveChannels*2 > sdReadBufferSize) {
               nFullBufferReads = (unsigned long)(floor(((double)nSamplesAcquired)*double(nActiveChannels)*2 / (double)sdReadBufferSize));
             } else {
               nFullBufferReads = 0;
-            }
-            USBCOM.writeUint32(nSamplesAcquired);     
+            } 
+            USBCOM.writeUint32(nSamplesAcquired);      
             for (int i = 0; i < nFullBufferReads; i++) { // Full buffer transfers; skipped if nFullBufferReads = 0
               DataFile.read(sdReadBuffer, sdReadBufferSize);
               USBCOM.writeByteArray(sdReadBuffer, sdReadBufferSize);
             }
-            nRemainderBytes = (nSamplesAcquired*nActiveChannels*2)-(nFullBufferReads*sdReadBufferSize);
+            nRemainderBytes = (nSamplesAcquired*nActiveChannels*2)-(nFullBufferReads*sdReadBufferSize); 
             if (nRemainderBytes > 0) {
               DataFile.read(sdReadBuffer, nRemainderBytes);
               USBCOM.writeByteArray(sdReadBuffer, nRemainderBytes);     
