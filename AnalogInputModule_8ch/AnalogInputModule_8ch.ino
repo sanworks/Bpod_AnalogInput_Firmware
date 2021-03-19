@@ -40,7 +40,7 @@
 SdFatSdioEX SD;
 
 // Module setup
-unsigned long FirmwareVersion = 2;
+unsigned long FirmwareVersion = 3;
 char moduleName[] = "AnalogIn"; // Name of module for manual override UI and state machine assembler
 
 AD7327 AD(39); // Create AD, an AD7327 ADC object.
