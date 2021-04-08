@@ -2,7 +2,7 @@
   ----------------------------------------------------------------------------
 
   This file is part of the Sanworks Bpod repository
-  Copyright (C) 2018 Sanworks LLC, Stony Brook, New York, USA
+  Copyright (C) 2021 Sanworks LLC, Rochester, New York, USA
 
   ----------------------------------------------------------------------------
 
@@ -20,24 +20,16 @@
 */
 // Analog Module firmware v2
 // Federico Carnevale, October 2016
-// Revised by Josh Sanders, April 2018
+// Revised by Josh Sanders, April 2018-April 2021
 
-// ** DEPENDENCIES YOU NEED TO INSTALL FIRST **
-
-// This firmware uses the sdFat library, developed by Bill Greiman. (Thanks Bill!!)
-// Download it from here: https://github.com/greiman/SdFat
-// and copy it to your /Arduino/Libraries folder.
-
-// ALSO Requires modifications to Teensy core files:
-// In the folder /arduino-1.8.X/hardware/teensy/avr/cores/teensy3, modify the following line in each of the 5 files listed below:
-// #define SERIAL1_RX_BUFFER_SIZE 64  --> #define SERIAL1_RX_BUFFER_SIZE 256
-// IN FILES: serial1.c, serial2.c, serial3.c
+// **NOTE** previous versions of this firmware required dependencies and modifications to the Teensy core files. As of firmware v4, these are no longer necessary.
+// **NOTE** Requires Arduino 1.8.13 or newer, and Teensyduino 1.5.4 (tested on 1.5.4 beta 7)
 
 #include "ArCOM.h" // A wrapper for Arduino serial interfaces. See https://sites.google.com/site/sanworksdocs/arcom
 #include "AD7327.h" // Library for the AD7327 Analog to digital converter IC
 #include <SPI.h>
-#include <SdFat.h> // Library for microSD
-SdFatSdioEX SD;
+#include "SdFat.h"
+SdFs SDcard;
 
 // Module setup
 unsigned long FirmwareVersion = 3;
@@ -49,6 +41,9 @@ ArCOM USBCOM(SerialUSB); // Creates an ArCOM object called USBCOM, wrapping Seri
 ArCOM StateMachineCOM(Serial3); // Creates an ArCOM object for the state machine
 ArCOM OutputStreamCOM(Serial2); // Creates an ArCOM object for the output stream
 
+// Extra memory for state machine serial buffer
+byte StateMachineSerialBuf[192] = {0};
+
 // Digital i/o pins available from side of enclosure (not currently used; can be configured as an I2C interface)
 byte DigitalPin1 = 18;
 byte DigitalPin2 = 19;
@@ -56,8 +51,8 @@ byte DigitalPin2 = 19;
 // System objects
 SPISettings ADCSettings(10000000, MSBFIRST, SPI_MODE2);
 IntervalTimer hardwareTimer; // Hardware timer to ensure even sampling
-File DataFile; // File on microSD card, to store waveform data
-File CalFile; // File on microSD card, to store calibration data
+FsFile DataFile; // File on microSD card, to store waveform data
+FsFile CalFile; // File on microSD card, to store calibration data
 
 // Op menu variable
 byte opCode = 0; // Serial inputs access an op menu. The op code byte stores the intended operation.
@@ -117,6 +112,9 @@ uint32_t maxSamplesToAcquire = 0; // maximum number of samples to acquire on sta
 uint32_t sum = 0; // Sum for calculating zero-code correction
 boolean writeFlag = false; // True if a write buffer contains samples to be written to SD
 byte streamPrefix = 'R'; // Byte sent before each sample of data when streaming to output module
+byte usbDataPrefix = 'R'; // Byte sent before each sample of data when streaming to usb
+boolean usbSyncFlag = false; // True if a sync signal arrived from the state machine. If streaming, this is relayed to PC along with the current samples
+byte usbSyncData = 0; // A byte relayed with each sync message
 union { // Union for conversion of calibration values to <-> from SD card
     byte byteArray[2];
     int16_t int16;
@@ -133,26 +131,24 @@ byte currentUSBBuffer = 0; // Which USB buffer is currently being used to captur
 uint16_t usbBufferPos[2] = {0}; // Current position in each USB buffer (number of samples captured)
 boolean usbBufferFlag = false; // True if new data is available in the current USB buffer
 
-// Error messages stored in flash.
-#define error(msg) sd.errorHalt(F(msg))
-
 void setup() {
   pinMode(DigitalPin1, OUTPUT);
   digitalWrite(DigitalPin1, HIGH); // This allows a potentiometer to be powered from the board, for coarse diagnostics
+  Serial3.addMemoryForRead(StateMachineSerialBuf, 192);
   Serial2.begin(1312500); // Select the highest value your CAT5e/CAT6 cable supports without dropped bytes: 1312500, 2457600, 3686400, 7372800
   Serial3.begin(1312500);
   SPI.begin();
-  SD.begin(); // Initialize microSD card
-  if (SD.exists("Cal.wfm")) {
-    CalFile = SD.open("Cal.wfm", FILE_READ);
+  SDcard.begin(SdioConfig(FIFO_SDIO)); // Initialize microSD card
+  if (SDcard.exists("Cal.wfm")) {
+    CalFile = SDcard.open("Cal.wfm", O_RDWR | O_CREAT);
     for (int i = 0; i < 3; i++) {
       CalFile.read(typeBuffer.byteArray, 2);
       zeroCodeOffset[i] = typeBuffer.int16;
     }
     CalFile.close();
   }
-  SD.remove("Data.wfm");
-  DataFile = SD.open("Data.wfm", FILE_WRITE);
+  SDcard.remove("Data.wfm");
+  DataFile = SDcard.open("Data.wfm", O_RDWR | O_CREAT);
   timerPeriod = (1/(double)samplingRate)*1000000;
   hardwareTimer.begin(handler, timerPeriod); // hardwareTimer is an interval timer object - Teensy 3.6's hardware timer
 }
@@ -210,6 +206,7 @@ void handler(void) {
           StreamSignalToUSB = false;
           SendEventsToUSB = false;
           LoggingDataToSD = false;
+          usbSyncFlag = false;
           SendEventsToStateMachine = false;
           StreamSignalToModule = false;
           samplingRate = 1000;
@@ -260,6 +257,13 @@ void handler(void) {
                 USBCOM.writeByte(1); // Send confirm byte
               }
           break;
+        }
+      break;
+
+      case '#': 
+        if (opSource == 1) {
+          usbSyncData = StateMachineCOM.readByte();
+          usbSyncFlag = true;
         }
       break;
 
@@ -436,14 +440,14 @@ void handler(void) {
         }
         AD.setRange(0, voltageRanges[0]);        
         DataFile.close();
-        SD.remove("Cal.wfm");
-        CalFile = SD.open("Cal.wfm", FILE_WRITE);
+        SDcard.remove("Cal.wfm");
+        CalFile = SDcard.open("Cal.wfm", O_RDWR | O_CREAT);
         for (int i = 0; i < 3; i++) {
           typeBuffer.int16 = zeroCodeOffset[i];
           CalFile.write(typeBuffer.byteArray, 2);
         }
         CalFile.close();
-        DataFile = SD.open("Data.wfm", FILE_WRITE);
+        DataFile = SDcard.open("Data.wfm", O_RDWR | O_CREAT);
       }
       break;
     }// end switch(opCode)
@@ -492,11 +496,20 @@ void handler(void) {
     LogData();
   } 
   if (StreamSignalToUSB) { // Stream data to USB
-    if (currentUSBBuffer == 0) {
-      usbBufferA.uint16[usbBufferPos[currentUSBBuffer]] = 'R';
+    if (usbSyncFlag) {
+      usbDataPrefix = '#'; // Sync + Read
+      usbSyncFlag = false;
     } else {
-      usbBufferB.uint16[usbBufferPos[currentUSBBuffer]] = 'R';
+      usbDataPrefix = 'R'; // Read
     }
+    if (currentUSBBuffer == 0) {
+      usbBufferA.byteArray[usbBufferPos[currentUSBBuffer]*2] = usbDataPrefix;
+      usbBufferA.byteArray[usbBufferPos[currentUSBBuffer]*2 + 1] = usbSyncData;
+    } else {
+      usbBufferB.byteArray[usbBufferPos[currentUSBBuffer]*2] = usbDataPrefix;
+      usbBufferB.byteArray[usbBufferPos[currentUSBBuffer]*2 + 1] = usbSyncData;
+    }
+    usbSyncData = 0;
     usbBufferPos[currentUSBBuffer]++; 
     for (int i = 0; i < nActiveChannels; i++) {
         if (streamChan2USB[i]) {
