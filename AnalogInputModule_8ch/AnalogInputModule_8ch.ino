@@ -18,7 +18,7 @@
   along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 */
-// Analog Module firmware v2
+// Analog Module firmware
 // Federico Carnevale, October 2016
 // Revised by Josh Sanders, April 2018-April 2021
 
@@ -32,7 +32,7 @@
 SdFs SDcard;
 
 // Module setup
-unsigned long FirmwareVersion = 3;
+unsigned long FirmwareVersion = 4;
 char moduleName[] = "AnalogIn"; // Name of module for manual override UI and state machine assembler
 
 AD7327 AD(39); // Create AD, an AD7327 ADC object.
