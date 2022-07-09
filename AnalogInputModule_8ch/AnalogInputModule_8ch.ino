@@ -23,7 +23,7 @@
 // Revised by Josh Sanders, April 2018-April 2021
 
 // **NOTE** previous versions of this firmware required dependencies and modifications to the Teensy core files. As of firmware v4, these are no longer necessary.
-// **NOTE** Requires Arduino 1.8.13 or newer, and Teensyduino 1.5.4 (tested on 1.5.4 beta 7)
+// **NOTE** Requires Arduino 1.8.13 or newer, and Teensyduino 1.5.4
 
 #include "ArCOM.h" // A wrapper for Arduino serial interfaces. See https://sites.google.com/site/sanworksdocs/arcom
 #include "AD7327.h" // Library for the AD7327 Analog to digital converter IC
