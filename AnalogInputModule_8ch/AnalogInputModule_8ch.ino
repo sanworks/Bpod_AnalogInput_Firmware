@@ -2,7 +2,7 @@
   ----------------------------------------------------------------------------
 
   This file is part of the Sanworks Bpod repository
-  Copyright (C) 2021 Sanworks LLC, Rochester, New York, USA
+  Copyright (C) 2023 Sanworks LLC, Rochester, New York, USA
 
   ----------------------------------------------------------------------------
 
@@ -20,25 +20,55 @@
 */
 // Analog Module firmware
 // Federico Carnevale, October 2016
-// Revised by Josh Sanders, April 2018-April 2021
+// Revised by Josh Sanders, April 2018-April 2023
 
 // **NOTE** previous versions of this firmware required dependencies and modifications to the Teensy core files. As of firmware v4, these are no longer necessary.
 // **NOTE** Requires Arduino 1.8.13 or newer, and Teensyduino 1.5.4
 
 #include "ArCOM.h" // A wrapper for Arduino serial interfaces. See https://sites.google.com/site/sanworksdocs/arcom
-#include "AD7327.h" // Library for the AD7327 Analog to digital converter IC
 #include <SPI.h>
 #include "SdFat.h"
+
+#define FIRMWARE_VERSION 5
+
+// SETUP MACROS TO COMPILE FOR TARGET DEVICE:
+#define HARDWARE_VERSION 2 // Use: 1 = AIM rev 1.0-1.2 (as marked on PCB), 2 = AIM rev 2.0
+//-------------------------------------------
+
+// Validate macros
+#if (HARDWARE_VERSION > 2)
+#error Error! HARDWARE_VERSION must be either 1 or 2
+#endif
+
+#if (HARDWARE_VERSION == 1)
+  #include "AD7327.h" // Library for the AD7327 Analog to digital converter IC
+  #define N_RANGES 4 // Number of ranges supported
+#else
+  #include "AD7606C.h" // Library for the AD7606C Analog to digital acquisition system IC
+  #define CS_PIN 41 // Chip select 
+  #define RESET_PIN 14 // Hard reset
+  #define CONV_START_PIN 15 // Conversion start signal - ADC samples 8ch simultaneously on rising edge of CONV_START
+  #define N_RANGES 12 // Number of ranges supported
+#endif
+byte circuitRevisionArray[5] = {28,29,30,31,32};
 SdFs SDcard;
+bool ready = false; // Indicates if SD is busy (for use with SDBusy() funciton)
 
 // Module setup
-unsigned long FirmwareVersion = 4;
 char moduleName[] = "AnalogIn"; // Name of module for manual override UI and state machine assembler
 
-AD7327 AD(39); // Create AD, an AD7327 ADC object.
+#if HARDWARE_VERSION == 1
+  AD7327 AD(39); // Create AD, an AD7327 ADC object.
+#else
+  AD7606C AD(CS_PIN, RESET_PIN, CONV_START_PIN);
+#endif
 
 ArCOM USBCOM(SerialUSB); // Creates an ArCOM object called USBCOM, wrapping SerialUSB. See https://sites.google.com/site/sanworksdocs/arcom
-ArCOM StateMachineCOM(Serial3); // Creates an ArCOM object for the state machine
+#if HARDWARE_VERSION == 1
+  ArCOM StateMachineCOM(Serial3); // Creates an ArCOM object for the state machine
+#else
+  ArCOM StateMachineCOM(Serial1); // Creates an ArCOM object for the state machine
+#endif
 ArCOM OutputStreamCOM(Serial2); // Creates an ArCOM object for the output stream
 
 // Extra memory for state machine serial buffer
@@ -49,7 +79,6 @@ byte DigitalPin1 = 18;
 byte DigitalPin2 = 19;
 
 // System objects
-SPISettings ADCSettings(10000000, MSBFIRST, SPI_MODE2);
 IntervalTimer hardwareTimer; // Hardware timer to ensure even sampling
 FsFile DataFile; // File on microSD card, to store waveform data
 FsFile CalFile; // File on microSD card, to store calibration data
@@ -71,6 +100,8 @@ boolean StreamSignalToModule = false; // Send adc reads to output or DDS module 
 boolean LoggingDataToSD = false; // Logs active channels to SD card
 boolean SendEventsToUSB = false; // Send threshold crossing events to USB
 boolean SendEventsToStateMachine = false; // Send threshold crossing events to state machine
+boolean AppConnected = false; // True if PC-side software is connected to the device
+volatile boolean sd2USBflag = false; // True if data is in cue to be returned from the microSD card to USB
 
 // State variables
 byte streamChan2Module[nPhysicalChannels] = {0}; // List of channels streaming to module
@@ -90,9 +121,13 @@ boolean thresholdDirection[nPhysicalChannels] = {0}; // Indicates whether resetV
 boolean thresholdEventDetected[nPhysicalChannels] = {0};
 
 // SD variables
-uint32_t nFullBufferReads = 0; // Number of full buffer reads in transmission
-uint32_t nRemainderBytes = 0; // Number of bytes remaining after full transmissions
-const uint32_t sdReadBufferSize = 2048; // in bytes
+volatile uint32_t nFullBufferReads = 0; // Number of full buffer reads in transmission
+volatile uint32_t nRemainderBytes = 0; // Number of bytes remaining after full transmissions
+#if HARDWARE_VERSION == 1
+  const uint32_t sdReadBufferSize = 4096;  //2048
+#else
+  const uint32_t sdReadBufferSize = 1024; // HW version 2 must transmit microSD ==> USB more slowly so the PC can keep up
+#endif
 uint8_t sdReadBuffer[sdReadBufferSize] = {0};
 const uint32_t sdWriteBufferSize = 2048; // in bytes
 uint16_t sdWriteBuffer[nPhysicalChannels*sdWriteBufferSize*2] = {0}; // These two buffers store data to be written to microSD. 
@@ -105,7 +140,7 @@ byte currentBuffer = 0; // Current buffer being written to microSD
 
 
 // Other variables
-int16_t zeroCodeOffset[4] = {0, 0, 0, 0}; // Zero-code offset corrections for each channel
+int16_t zeroCodeOffset[12] = {0}; // Zero-code offset corrections for each range
 int16_t thisZCC = 0; // Temporary variable to store zero-code correction during computation
 uint32_t nSamplesAcquired = 0; // Number of samples acquired since logging started
 uint32_t maxSamplesToAcquire = 0; // maximum number of samples to acquire on startLogging command. 0 = infinite
@@ -115,6 +150,8 @@ byte streamPrefix = 'R'; // Byte sent before each sample of data when streaming 
 byte usbDataPrefix = 'R'; // Byte sent before each sample of data when streaming to usb
 boolean usbSyncFlag = false; // True if a sync signal arrived from the state machine. If streaming, this is relayed to PC along with the current samples
 byte usbSyncData = 0; // A byte relayed with each sync message
+byte circuitRevision = 0; // A byte containing the circuit revision, read from an array of pins on the board
+boolean throttleUSB = false; // If true, USB transfer is throttled to 300kB/s (necessary for MATLAB built-in serial interface)
 union { // Union for conversion of calibration values to <-> from SD card
     byte byteArray[2];
     int16_t int16;
@@ -134,21 +171,42 @@ boolean usbBufferFlag = false; // True if new data is available in the current U
 void setup() {
   pinMode(DigitalPin1, OUTPUT);
   digitalWrite(DigitalPin1, HIGH); // This allows a potentiometer to be powered from the board, for coarse diagnostics
-  Serial3.addMemoryForRead(StateMachineSerialBuf, 192);
+  #if HARDWARE_VERSION == 1
+    Serial3.addMemoryForRead(StateMachineSerialBuf, 192);
+    Serial3.begin(1312500);
+  #else
+    Serial1.addMemoryForRead(StateMachineSerialBuf, 192);
+    Serial1.begin(1312500);
+  #endif
   Serial2.begin(1312500); // Select the highest value your CAT5e/CAT6 cable supports without dropped bytes: 1312500, 2457600, 3686400, 7372800
-  Serial3.begin(1312500);
-  SPI.begin();
+  
+  // Read hardware revision from circuit board (an array of grounded pins indicates revision in binary, grounded = 1, floating = 0)
+  circuitRevision = 0;
+  for (int i = 0; i < 5; i++) {
+    pinMode(circuitRevisionArray[i], INPUT_PULLUP);
+    circuitRevision += pow(2, i)*digitalRead(circuitRevisionArray[i]);
+    pinMode(circuitRevisionArray[i], INPUT);
+  }
+  circuitRevision = 31-circuitRevision;
+
+  //SPI.begin();
   SDcard.begin(SdioConfig(FIFO_SDIO)); // Initialize microSD card
   if (SDcard.exists("Cal.wfm")) {
     CalFile = SDcard.open("Cal.wfm", O_RDWR | O_CREAT);
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < N_RANGES; i++) {
       CalFile.read(typeBuffer.byteArray, 2);
       zeroCodeOffset[i] = typeBuffer.int16;
     }
     CalFile.close();
   }
   SDcard.remove("Data.wfm");
-  DataFile = SDcard.open("Data.wfm", O_RDWR | O_CREAT);
+  DataFile = SDcard.open("Data.wfm", O_RDWR | O_CREAT);  
+  #if HARDWARE_VERSION == 2
+    for (int i = 0; i < 8; i++) {
+      AD.setRange(i, 3);
+      AD.setOffset(i, 128+zeroCodeOffset[3]);
+    }
+  #endif 
   timerPeriod = (1/(double)samplingRate)*1000000;
   hardwareTimer.begin(handler, timerPeriod); // hardwareTimer is an interval timer object - Teensy 3.6's hardware timer
 }
@@ -177,9 +235,31 @@ void loop() {
     Serial.flush();
     usbBufferFlag = false;
   }
+  if (sd2USBflag) {
+    for (int i = 0; i < nFullBufferReads; i++) { // Full buffer transfers; skipped if nFullBufferReads = 0
+      while (sdBusy()) {}
+      DataFile.read(sdReadBuffer, sdReadBufferSize);
+      while (sdBusy()) {}
+      Serial.write(sdReadBuffer, sdReadBufferSize);
+      if (throttleUSB) {
+        delayMicroseconds(500);
+      }    
+    }
+    if (nRemainderBytes > 0) {
+      while (sdBusy()) {}
+      DataFile.read(sdReadBuffer, nRemainderBytes);
+      while (sdBusy()) {}
+      Serial.write(sdReadBuffer, nRemainderBytes);
+      Serial.send_now();   
+    }
+    sd2USBflag = false;
+  }
 }
 
 void handler(void) {
+  if (AppConnected) {
+    AD.readADC(); // Reads all active channels and stores the result in a buffer in the AD object: AD.analogData[]
+  }
   if (StateMachineCOM.available() > 0) { // If bytes arrived from the state machine
     opCode = StateMachineCOM.readByte(); // Read in an op code
     opSource = 1; // 0 = USB, 1 = State machine, 2 = output stream (DDS, Analog output module, etc)
@@ -202,7 +282,8 @@ void handler(void) {
       case 'O': // USB initiated new connection; reset all state variables
         if (opSource == 0) {
           USBCOM.writeByte(161); // Send acknowledgement byte
-          USBCOM.writeUint32(FirmwareVersion); // Send firmware version
+          USBCOM.writeUint32(FIRMWARE_VERSION); // Send firmware version
+          AppConnected = true;
           StreamSignalToUSB = false;
           SendEventsToUSB = false;
           LoggingDataToSD = false;
@@ -211,12 +292,18 @@ void handler(void) {
           StreamSignalToModule = false;
           samplingRate = 1000;
           nActiveChannels = 8;
-          AD.setNchannels(nActiveChannels);
+          #if HARDWARE_VERSION == 1
+            AD.setNchannels(nActiveChannels);
+          #endif
           for (int i = 0; i > nPhysicalChannels; i++) {
             streamChan2Module[i] = 0;
             streamChan2USB[i] = 0;
             voltageRanges[i] = 0;
-            AD.setRange(i, 0);
+            #if HARDWARE_VERSION == 1
+              AD.setRange(i, 0);
+            #else
+              AD.setRange(i, 3);
+            #endif
             eventChannels[i] = 0;
             eventEnabled[i] = 0;
             thresholdValue[i] = 0;
@@ -244,6 +331,9 @@ void handler(void) {
           USBCOM.writeByte(254);
         }
       break;
+      case 'H':
+        USBCOM.writeByte(HARDWARE_VERSION);
+      break;
 
       case 'S': // Start/Stop data streaming
         inByte = readByteFromSource(opSource);
@@ -260,7 +350,7 @@ void handler(void) {
         }
       break;
 
-      case '#': 
+      case '#': // Relay sync byte and the current AIM timestamp to PC during streaming
         if (opSource == 1) {
           usbSyncData = StateMachineCOM.readByte();
           usbSyncFlag = true;
@@ -319,6 +409,9 @@ void handler(void) {
               USBCOM.readByteArray(voltageRanges, nPhysicalChannels);
               for (int i = 0; i < nPhysicalChannels; i++) {
                 AD.setRange(i, voltageRanges[i]);
+                #if HARDWARE_VERSION == 2
+                  AD.setOffset(i, 128+zeroCodeOffset[voltageRanges[i]]);
+                #endif
               }
               USBCOM.writeByte(1); // Send confirm byte
             } else {
@@ -334,7 +427,9 @@ void handler(void) {
         if (opSource == 0) {
           if (!LoggingDataToSD) {
             nActiveChannels = USBCOM.readByte();
-            AD.setNchannels(nActiveChannels);
+            #if HARDWARE_VERSION == 1
+              AD.setNchannels(nActiveChannels);
+            #endif
             USBCOM.writeByte(1); // Send confirm byte
           } else {
             USBCOM.readByte();
@@ -371,24 +466,17 @@ void handler(void) {
 
       case 'D': // Read SD card and send data to USB
         if (opSource == 0) {
-            LoggingDataToSD = false;
-            while (writeFlag) {};
+            while (sdBusy()) {}
             DataFile.seek(0);
             if (nSamplesAcquired*nActiveChannels*2 > sdReadBufferSize) {
-              nFullBufferReads = (unsigned long)(floor(((double)nSamplesAcquired)*double(nActiveChannels)*2 / (double)sdReadBufferSize));
+              nFullBufferReads = (uint32_t)(floor(((double)nSamplesAcquired)*double(nActiveChannels)*2 / (double)sdReadBufferSize));
             } else {
               nFullBufferReads = 0;
             } 
-            USBCOM.writeUint32(nSamplesAcquired);      
-            for (int i = 0; i < nFullBufferReads; i++) { // Full buffer transfers; skipped if nFullBufferReads = 0
-              DataFile.read(sdReadBuffer, sdReadBufferSize);
-              USBCOM.writeByteArray(sdReadBuffer, sdReadBufferSize);
-            }
-            nRemainderBytes = (nSamplesAcquired*nActiveChannels*2)-(nFullBufferReads*sdReadBufferSize); 
-            if (nRemainderBytes > 0) {
-              DataFile.read(sdReadBuffer, nRemainderBytes);
-              USBCOM.writeByteArray(sdReadBuffer, nRemainderBytes);     
-            }
+            USBCOM.writeUint32(nSamplesAcquired); 
+            nRemainderBytes = (nSamplesAcquired*nActiveChannels*2)-(nFullBufferReads*sdReadBufferSize);    
+            LoggingDataToSD = false;
+            sd2USBflag = true;
           }
       break;
 
@@ -426,23 +514,59 @@ void handler(void) {
         }
       break;
 
+      case 'o': // Set ADC voltage offset (HW version 2 only)
+         #if HARDWARE_VERSION == 2
+          if (opSource == 0) {
+            byte offsetChan = USBCOM.readByte();
+            byte offsetVal = USBCOM.readByte();
+            AD.setOffset(offsetChan, offsetVal);
+          }
+        #endif
+      break;
+
+      case 't': // throttle USB
+        throttleUSB = USBCOM.readByte();
+      break;
+
+      case 'X': // Disconnect from PC-side app
+        AppConnected = false;
+      break;
+
       case 'Z': // Measure and set zero-code offset (first, connect a wire between channel 1 signal and ground; ch1 on device = ch0 in code)
+                // Note that on the AD7606C, the zero code offset is programmed into the ADC chip, not handled in firmware
       if ((opSource == 0) && (!LoggingDataToSD)) {
-        for (int i = 0; i < 3; i++) {
+        #if HARDWARE_VERSION == 2
+          AD.setOffset(0, 128);
+        #endif
+        for (int i = 0; i < N_RANGES; i++) {
           AD.setRange(0, i);
           sum = 0;
-          for (int j = 0; j < 100; j++) {
+          for (int j = 0; j < 1000; j++) {
             AD.readADC();
             sum += AD.analogData.uint16[0];
           }
-          thisZCC = (int16_t)(4095-(sum/100));
+          thisZCC = 0;
+          #if HARDWARE_VERSION == 1
+            if (i < 4) { // Exclude single-ended ranges
+              thisZCC = (int16_t)(4095-(sum/1000));
+            }
+          #else
+            if ((i < 5) || (i > 7)) { // Exclude single-ended ranges
+              thisZCC = (int16_t)(32768-(sum/1000));
+            }
+          #endif
           zeroCodeOffset[i] = thisZCC;
         }
-        AD.setRange(0, voltageRanges[0]);        
+        AD.setRange(0, voltageRanges[0]);
+        #if HARDWARE_VERSION == 2
+          for (int i = 0; i < 8; i++) {
+            AD.setOffset(i, 128+zeroCodeOffset[voltageRanges[i]]);
+          }
+        #endif        
         DataFile.close();
         SDcard.remove("Cal.wfm");
         CalFile = SDcard.open("Cal.wfm", O_RDWR | O_CREAT);
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < N_RANGES; i++) {
           typeBuffer.int16 = zeroCodeOffset[i];
           CalFile.write(typeBuffer.byteArray, 2);
         }
@@ -452,11 +576,11 @@ void handler(void) {
       break;
     }// end switch(opCode)
   }// end newOpCode
-
-  AD.readADC(); // Reads all active channels and stores the result in a buffer in the AD object: AD.analogData[]
   
   for (int i = 0; i < nActiveChannels; i++) { // Detect threshold crossings and send to targets
-    AD.analogData.uint16[i] += zeroCodeOffset[voltageRanges[i]];
+    #if HARDWARE_VERSION == 1
+      AD.analogData.uint16[i] += zeroCodeOffset[voltageRanges[i]];
+    #endif
     if (eventChannels[i]) { // If event reporting is enabled for this channel
       thresholdEventDetected[i] = false;
       if (eventEnabled[i]) { // Check for threshold crossing
@@ -541,6 +665,9 @@ void LogData() {
     for (int i = 0; i < nActiveChannels; i++) {
       sdWriteBuffer[writeBufferPos] = AD.analogData.uint16[i]; writeBufferPos++;
     }
+    // Above loop using memcpy:
+    // memcpy(&sdWriteBuffer[writeBufferPos], &AD.analogData.uint16[0], nActiveChannels * sizeof(uint16_t));
+    // writeBufferPos += nActiveChannels;
   } else {
     for (int i = 0; i < nActiveChannels; i++) {
       sdWriteBuffer2[writeBuffer2Pos] = AD.analogData.uint16[i]; writeBuffer2Pos++;
@@ -571,10 +698,27 @@ byte readByteFromSource(byte opSource) {
   }
 }
 
-void returnModuleInfo() {
-  StateMachineCOM.writeByte(65); // Acknowledge
-  StateMachineCOM.writeUint32(FirmwareVersion); // 4-byte firmware version
-  StateMachineCOM.writeByte(sizeof(moduleName) - 1); // Length of module name
-  StateMachineCOM.writeCharArray(moduleName, sizeof(moduleName) - 1); // Module name
-  StateMachineCOM.writeByte(0);
+bool sdBusy() {
+  return ready ? SDcard.card()->isBusy() : false;
 }
+
+void returnModuleInfo() {
+  boolean fsmSupportsHwInfo = false;
+  delayMicroseconds(100);
+  if (StateMachineCOM.available() == 1) { // FSM firmware v23 or newer sends a second info request byte to indicate that it supports additional ops
+    if (StateMachineCOM.readByte() == 255) {fsmSupportsHwInfo = true;}
+  }
+  StateMachineCOM.writeByte('A'); // Acknowledge
+  StateMachineCOM.writeUint32(FIRMWARE_VERSION); // 4-byte firmware version
+  StateMachineCOM.writeByte(sizeof(moduleName)-1); // Length of module name
+  StateMachineCOM.writeCharArray(moduleName, sizeof(moduleName)-1); // Module name
+  if (fsmSupportsHwInfo) {
+    StateMachineCOM.writeByte(1); // 1 if more info follows, 0 if not
+    StateMachineCOM.writeByte('V'); // Op code for: Hardware major version
+    StateMachineCOM.writeByte(HARDWARE_VERSION); 
+    StateMachineCOM.writeByte(1); // 1 if more info follows, 0 if not
+    StateMachineCOM.writeByte('v'); // Op code for: Hardware minor version
+    StateMachineCOM.writeByte(circuitRevision); 
+  }
+  StateMachineCOM.writeByte(0); // 1 if more info follows, 0 if not
+} 
