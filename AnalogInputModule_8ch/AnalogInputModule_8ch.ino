@@ -170,8 +170,10 @@ boolean usbBufferFlag = false; // True if new data is available in the current U
 
 void setup() {
   pinMode(DigitalPin1, OUTPUT);
-  digitalWrite(DigitalPin1, HIGH); // This allows a potentiometer to be powered from the board, for coarse diagnostics
+  digitalWrite(DigitalPin1, LOW);
   #if HARDWARE_VERSION == 1
+    pinMode(DigitalPin1, OUTPUT);
+    digitalWrite(DigitalPin1, HIGH); // This allows a potentiometer to be powered from the board, for coarse diagnostics. V2 has a 5V reference output for this.
     Serial3.addMemoryForRead(StateMachineSerialBuf, 192);
     Serial3.begin(1312500);
   #else
@@ -665,9 +667,6 @@ void LogData() {
     for (int i = 0; i < nActiveChannels; i++) {
       sdWriteBuffer[writeBufferPos] = AD.analogData.uint16[i]; writeBufferPos++;
     }
-    // Above loop using memcpy:
-    // memcpy(&sdWriteBuffer[writeBufferPos], &AD.analogData.uint16[0], nActiveChannels * sizeof(uint16_t));
-    // writeBufferPos += nActiveChannels;
   } else {
     for (int i = 0; i < nActiveChannels; i++) {
       sdWriteBuffer2[writeBuffer2Pos] = AD.analogData.uint16[i]; writeBuffer2Pos++;

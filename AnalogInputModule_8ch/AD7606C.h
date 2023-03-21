@@ -92,7 +92,7 @@ private:
   // 11: +/-20V, Differential
   byte rangeCodes[8] = {3,3,3,3,3,3,3,3};
   boolean isBipolarRange[8] = {true,true,true,true,true,true,true,true};
-  const byte conversionTime[3] = {10, 20, 35}; // Time to wait for conversion for each oversampling mode. unit = us
+  const byte conversionTime[3] = {2, 3, 5}; // Time to wait for conversion for each oversampling mode. unit = us 
   union {
     byte byteArray[4];
     uint16_t uint16[2];
