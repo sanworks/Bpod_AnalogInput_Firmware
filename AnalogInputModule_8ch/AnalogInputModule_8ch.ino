@@ -32,11 +32,11 @@
 #define FIRMWARE_VERSION 5
 
 // SETUP MACROS TO COMPILE FOR TARGET DEVICE:
-#define HARDWARE_VERSION 2 // Use: 1 = AIM rev 1.0-1.2 (as marked on PCB), 2 = AIM rev 2.0
+#define HARDWARE_VERSION 0 // Use: 1 = AIM rev 1.0-1.2 (as marked on PCB), 2 = AIM rev 2.0
 //-------------------------------------------
 
 // Validate macros
-#if (HARDWARE_VERSION > 2)
+#if (HARDWARE_VERSION < 1) || (HARDWARE_VERSION > 2)
 #error Error! HARDWARE_VERSION must be either 1 or 2
 #endif
 
