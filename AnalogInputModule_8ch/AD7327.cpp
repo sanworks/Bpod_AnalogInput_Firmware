@@ -2,7 +2,7 @@
 ----------------------------------------------------------------------------
 
 This file is part of the Sanworks repository
-Copyright (C) 2016 Sanworks LLC, Sound Beach, New York, USA
+Copyright (C) 2023 Sanworks LLC, Rochester, New York, USA
 
 ----------------------------------------------------------------------------
 

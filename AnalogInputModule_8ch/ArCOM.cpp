@@ -2,7 +2,7 @@
 ----------------------------------------------------------------------------
 
 This file is part of the Sanworks ArCOM repository
-Copyright (C) 2016 Sanworks LLC, Sound Beach, New York, USA
+Copyright (C) 2023 Sanworks LLC, Rochester, New York, USA
 
 ----------------------------------------------------------------------------
 
@@ -39,23 +39,26 @@ void ArCOM::writeUint8(byte byte2Write) {
 void ArCOM::writeChar(char char2Write) {
   ArCOMstream->write(char2Write);
 }
+
 void ArCOM::writeUint16(uint16_t int2Write) {
   typeBuffer.uint16 = int2Write;
-  ArCOMstream->write(typeBuffer.byteArray, 2);
-   //ArCOMstream->write((byte)int2Write);
-   //ArCOMstream->write((byte)(int2Write >> 8));
+    ArCOMstream->write(typeBuffer.byteArray[0]);
+    ArCOMstream->write(typeBuffer.byteArray[1]);
 }
 
-void ArCOM::writeUint32(unsigned long int2Write) {
-    ArCOMstream->write((byte)int2Write);
-    ArCOMstream->write((byte)(int2Write >> 8));
-    ArCOMstream->write((byte)(int2Write >> 16));
-    ArCOMstream->write((byte)(int2Write >> 24));
+void ArCOM::writeUint32(uint32_t int2Write) {
+    typeBuffer.uint32 = int2Write;
+    ArCOMstream->write(typeBuffer.byteArray[0]);
+    ArCOMstream->write(typeBuffer.byteArray[1]);
+    ArCOMstream->write(typeBuffer.byteArray[2]);
+    ArCOMstream->write(typeBuffer.byteArray[3]);
 }
+
 byte ArCOM::readByte(){
   while (ArCOMstream->available() == 0) {}
   return ArCOMstream->read();
 }
+
 byte ArCOM::readUint8(){
   while (ArCOMstream->available() == 0) {}
   return ArCOMstream->read();
@@ -64,6 +67,7 @@ char ArCOM::readChar(){
   while (ArCOMstream->available() == 0) {}
   return ArCOMstream->read();
 }
+
 unsigned short ArCOM::readUint16() {
   while (ArCOMstream->available() == 0) {}
   typeBuffer.byteArray[0] = ArCOMstream->read();

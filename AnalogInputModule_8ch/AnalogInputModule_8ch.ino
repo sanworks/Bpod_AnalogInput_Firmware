@@ -138,6 +138,12 @@ uint32_t writeBufferPos = 0;
 uint32_t writeBuffer2Pos = 0;
 byte currentBuffer = 0; // Current buffer being written to microSD
 
+// PSRAM setup (for bench testing only, PSRAM is not used in current firmware)
+#if HARDWARE_VERSION > 1
+  extern "C" uint8_t external_psram_size;
+  uint32_t *memory_begin, *memory_end;
+  boolean memOK = false;
+#endif
 
 // Other variables
 int16_t zeroCodeOffset[12] = {0}; // Zero-code offset corrections for each range
@@ -177,6 +183,8 @@ void setup() {
     Serial3.addMemoryForRead(StateMachineSerialBuf, 192);
     Serial3.begin(1312500);
   #else
+    memory_begin = (uint32_t *)(0x70000000); // PSRAM start address
+    memory_end = (uint32_t *)(0x70000000 + external_psram_size * 1048576); // PSRAM end address
     Serial1.addMemoryForRead(StateMachineSerialBuf, 192);
     Serial1.begin(1312500);
   #endif
@@ -325,6 +333,7 @@ void handler(void) {
           returnModuleInfo();
         } 
       break;
+
       case 254: // Relay test byte from USB to echo module, or from echo module back to USB 
         if (opSource == 0) {
           OutputStreamCOM.writeByte(254);
@@ -333,6 +342,7 @@ void handler(void) {
           USBCOM.writeByte(254);
         }
       break;
+
       case 'H':
         USBCOM.writeByte(HARDWARE_VERSION);
       break;
@@ -530,6 +540,28 @@ void handler(void) {
         throttleUSB = USBCOM.readByte();
       break;
 
+      case '%': // test PSRAM (HW v2 only)
+        #if HARDWARE_VERSION > 1
+           if (opSource == 0) {
+             USBCOM.writeByte(external_psram_size);
+             memOK = true;
+             if (!check_fixed_pattern(0x55555555)) {memOK = false;}
+             if (!check_fixed_pattern(0x33333333)) {memOK = false;}
+             if (!check_fixed_pattern(0x0F0F0F0F)) {memOK = false;}
+             if (!check_fixed_pattern(0x00FF00FF)) {memOK = false;}
+             if (!check_fixed_pattern(0x0000FFFF)) {memOK = false;}
+             if (!check_fixed_pattern(0xAAAAAAAA)) {memOK = false;}
+             if (!check_fixed_pattern(0xCCCCCCCC)) {memOK = false;}
+             if (!check_fixed_pattern(0xF0F0F0F0)) {memOK = false;}
+             if (!check_fixed_pattern(0xFF00FF00)) {memOK = false;}
+             if (!check_fixed_pattern(0xFFFF0000)) {memOK = false;}
+             if (!check_fixed_pattern(0xFFFFFFFF)) {memOK = false;}
+             if (!check_fixed_pattern(0x00000000)) {memOK = false;}
+             USBCOM.writeByte(memOK);
+           }
+        #endif
+      break;
+
       case 'X': // Disconnect from PC-side app
         AppConnected = false;
       break;
@@ -696,6 +728,24 @@ byte readByteFromSource(byte opSource) {
     break;
   }
 }
+
+#if HARDWARE_VERSION > 1
+   // This memory test was adopted from PJRC's teensy41_psram_memtest repository : https://github.com/PaulStoffregen/teensy41_psram_memtest
+   bool check_fixed_pattern(uint32_t pattern)
+   {
+     volatile uint32_t *p;
+     for (p = memory_begin; p < memory_end; p++) {
+       *p = pattern;
+     }
+     arm_dcache_flush_delete((void *)memory_begin,
+       (uint32_t)memory_end - (uint32_t)memory_begin);
+     for (p = memory_begin; p < memory_end; p++) {
+       uint32_t actual = *p;
+       if (actual != pattern) return false;
+     }
+     return true;
+   }
+#endif
 
 bool sdBusy() {
   return ready ? SDcard.card()->isBusy() : false;
