@@ -42,10 +42,9 @@ AD7606C::AD7606C(byte csPin_In, byte resetPin_In, byte convStartPin_In) {
   digitalWrite(resetPin, LOW);
   SPI.begin();
   writeRegister(REG_CONFIG, 0);
-  writeRegister(REG_RANGE_CH1_CH2, B00110011); // 0-10V: B01100110
-  writeRegister(REG_RANGE_CH3_CH4, B00110011);
-  writeRegister(REG_RANGE_CH5_CH6, B00110011);
-  writeRegister(REG_RANGE_CH7_CH8, B00110011);
+  for (int i = 0; i < 8; i++) {
+    setRange(i, DEFAULT_RANGE_CODE);
+  }
   writeRegister(REG_OVERSAMPLING, oversampling); // Set to 4x by default
 }
 
@@ -120,7 +119,7 @@ void AD7606C::setRange(byte chan, byte rangeCode) {
     break;
   }
   isBipolarRange[chan] = true;
-  if ((rangeCode > 4) && (rangeCode < 7)) {
+  if ((rangeCode > 4) && (rangeCode < 8)) {
     isBipolarRange[chan] = false;
   }
 }

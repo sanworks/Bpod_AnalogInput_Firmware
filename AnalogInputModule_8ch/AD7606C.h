@@ -55,6 +55,9 @@ const byte REG_PHASE[8] = {25, 26, 27, 28, 29, 30, 31, 32};
 #define REG_OS_CLK_COUNTER 46
 #define REG_DEVICEID 47
 
+// Constants
+#define DEFAULT_RANGE_CODE 9
+
 class AD7606C 
 {
 public:
@@ -77,7 +80,7 @@ private:
   byte resetPin = 0;
   byte convStartPin = 0;
   byte oversampling = 2; // 0 = None, 1 = 2x, 2 = 4x
-  // Range Codes are:
+  // Range Codes in the AD7606C range registers are are:
   // 0: +/-2.5V, Single Ended
   // 1: +/-5V, Single Ended
   // 2: +/-6.25V, Single Ended
@@ -90,7 +93,7 @@ private:
   // 9: +/-10V, Differential
   // 10: +/-12.5V, Differential
   // 11: +/-20V, Differential
-  byte rangeCodes[8] = {3,3,3,3,3,3,3,3};
+  byte rangeCodes[8] = {0}; // the current range code for each channel, set to DEFAULT_RANGE_CODE in the constructor
   boolean isBipolarRange[8] = {true,true,true,true,true,true,true,true};
   const byte conversionTime[3] = {2, 3, 5}; // Time to wait for conversion for each oversampling mode. unit = us 
   union {
