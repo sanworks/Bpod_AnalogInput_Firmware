@@ -32,7 +32,7 @@
 #define FIRMWARE_VERSION 5
 
 // SETUP MACROS TO COMPILE FOR TARGET DEVICE:
-#define HARDWARE_VERSION 0 // Use: 1 = AIM rev 1.0-1.2 (as marked on PCB), 2 = AIM rev 2.0
+#define HARDWARE_VERSION 2 // Use: 1 = AIM rev 1.0-1.2 (as marked on PCB), 2 = AIM rev 2.0
 //-------------------------------------------
 
 // Validate macros
@@ -97,7 +97,7 @@ byte nActiveChannels = 8; // Number of channels currently being read (consecutiv
 // State Flags
 boolean StreamSignalToUSB = false; // Stream to USB
 boolean StreamSignalToModule = false; // Send adc reads to output or DDS module through serial port
-boolean LoggingDataToSD = false; // Logs active channels to SD card
+volatile boolean LoggingDataToSD = false; // Logs active channels to SD card
 boolean SendEventsToUSB = false; // Send threshold crossing events to USB
 boolean SendEventsToStateMachine = false; // Send threshold crossing events to state machine
 boolean AppConnected = false; // True if PC-side software is connected to the device
@@ -130,13 +130,13 @@ volatile uint32_t nRemainderBytes = 0; // Number of bytes remaining after full t
 #endif
 uint8_t sdReadBuffer[sdReadBufferSize] = {0};
 const uint32_t sdWriteBufferSize = 2048; // in bytes
-uint16_t sdWriteBuffer[nPhysicalChannels*sdWriteBufferSize*2] = {0}; // These two buffers store data to be written to microSD. 
+volatile uint16_t sdWriteBuffer[nPhysicalChannels*sdWriteBufferSize*2] = {0}; // These two buffers store data to be written to microSD. 
                                                                      // One is dumped to microSD in the main loop,
                                                                      // while the other is filled in the timer callback.
-uint16_t sdWriteBuffer2[nPhysicalChannels*sdWriteBufferSize*2] = {0};
-uint32_t writeBufferPos = 0;
-uint32_t writeBuffer2Pos = 0;
-byte currentBuffer = 0; // Current buffer being written to microSD
+volatile uint16_t sdWriteBuffer2[nPhysicalChannels*sdWriteBufferSize*2] = {0};
+volatile uint32_t writeBufferPos = 0;
+volatile uint32_t writeBuffer2Pos = 0;
+volatile byte currentBuffer = 0; // Current buffer being written to microSD
 
 // PSRAM setup (for bench testing only, PSRAM is not used in current firmware)
 #if HARDWARE_VERSION > 1
@@ -151,7 +151,7 @@ int16_t thisZCC = 0; // Temporary variable to store zero-code correction during 
 uint32_t nSamplesAcquired = 0; // Number of samples acquired since logging started
 uint32_t maxSamplesToAcquire = 0; // maximum number of samples to acquire on startLogging command. 0 = infinite
 uint32_t sum = 0; // Sum for calculating zero-code correction
-boolean writeFlag = false; // True if a write buffer contains samples to be written to SD
+volatile byte writeFlag = 0; // Incremented if a write buffer contains samples to be written to SD. Decremented as buffers are written.
 byte streamPrefix = 'R'; // Byte sent before each sample of data when streaming to output module
 byte usbDataPrefix = 'R'; // Byte sent before each sample of data when streaming to usb
 boolean usbSyncFlag = false; // True if a sync signal arrived from the state machine. If streaming, this is relayed to PC along with the current samples
@@ -222,7 +222,7 @@ void setup() {
 }
 
 void loop() {
-  if (writeFlag) { // If data is available to be written to microSD
+  if (writeFlag > 0) { // If data is available to be written to microSD
     if (currentBuffer == 0) { // If the data was loaded into buffer 0
       currentBuffer = 1; // Make the current buffer = 1
       DataFile.write(sdWriteBuffer, writeBufferPos*2); // Write to microSD
@@ -232,7 +232,7 @@ void loop() {
       DataFile.write(sdWriteBuffer2, writeBuffer2Pos*2);
       writeBuffer2Pos = 0;
     }
-    writeFlag = false;
+    writeFlag--;
   }
   if (usbBufferFlag) {
     currentUSBBuffer = 1-currentUSBBuffer;
@@ -704,7 +704,7 @@ void LogData() {
       sdWriteBuffer2[writeBuffer2Pos] = AD.analogData.uint16[i]; writeBuffer2Pos++;
     }
   }
-  writeFlag = true;
+  writeFlag++;
   nSamplesAcquired++;
   if (nSamplesAcquired == maxSamplesToAcquire) {
     stopLogging();
