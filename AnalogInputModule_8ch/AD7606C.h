@@ -68,7 +68,7 @@ public:
     uint16_t uint16[8];
     int16_t int16[8];
   } analogData;
-  
+  void init();
   void writeRegister(byte regID, byte value);
   uint8_t readRegister(byte regID);
   void readADC();

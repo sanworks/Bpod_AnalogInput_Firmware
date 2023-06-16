@@ -20,7 +20,7 @@
 */
 // Analog Module firmware
 // Federico Carnevale, October 2016
-// Revised by Josh Sanders, April 2018-April 2023
+// Revised by Josh Sanders, April 2018 - June 2023
 
 // **NOTE** previous versions of this firmware required dependencies and modifications to the Teensy core files. As of firmware v4, these are no longer necessary.
 // **NOTE** Requires Arduino 1.8.13 or newer, and Teensyduino 1.5.4
@@ -29,7 +29,7 @@
 #include <SPI.h>
 #include "SdFat.h"
 
-#define FIRMWARE_VERSION 5
+#define FIRMWARE_VERSION 6
 
 // SETUP MACROS TO COMPILE FOR TARGET DEVICE:
 #define HARDWARE_VERSION 2 // Use: 1 = AIM rev 1.0-1.2 (as marked on PCB), 2 = AIM rev 2.0
@@ -59,8 +59,10 @@ char moduleName[] = "AnalogIn"; // Name of module for manual override UI and sta
 
 #if HARDWARE_VERSION == 1
   AD7327 AD(39); // Create AD, an AD7327 ADC object.
+  const uint32_t bitMax = 8191;
 #else
   AD7606C AD(CS_PIN, RESET_PIN, CONV_START_PIN);
+  const uint32_t bitMax = 65535;
 #endif
 
 ArCOM USBCOM(SerialUSB); // Creates an ArCOM object called USBCOM, wrapping SerialUSB. See https://sites.google.com/site/sanworksdocs/arcom
@@ -112,13 +114,13 @@ double timerPeriod = 0;
 
 // Voltage threshold-crossing detection variables
 byte eventChannels[nPhysicalChannels] = {0}; // Indicates channels that generate events when events are turned on globally
-boolean eventEnabled[nPhysicalChannels] = {1}; // Events are disabled after a threshold crossing, until the value crosses resetValue
-uint16_t thresholdValue[nPhysicalChannels] = {8192}; // Voltage (in bits) of threshold. Default = max range (13-bits)
-uint16_t resetValue[nPhysicalChannels] = {0}; // Voltage (in bits) of reset event
-boolean thresholdDirection[nPhysicalChannels] = {0}; // Indicates whether resetValue is less than (0) or greater than (1) thresholdValue
+boolean eventEnabled[nPhysicalChannels*2] = {1}; // Events are disabled after a threshold crossing, until the value crosses resetValue
+uint16_t thresholdValue[nPhysicalChannels*2] = {0}; // Threshold voltage (in bits).
+uint16_t resetValue[nPhysicalChannels*2] = {0}; // Voltage (in bits) of reset event
+boolean thresholdDirection[nPhysicalChannels*2] = {0}; // Indicates whether resetValue is less than (0) or greater than (1) thresholdValue
                                                      // This also determines whether a voltage greater than (0) or less than (1) threshold
                                                      // will trigger an event.
-boolean thresholdEventDetected[nPhysicalChannels] = {0};
+boolean thresholdEventDetected[nPhysicalChannels*2] = {0};
 
 // SD variables
 volatile uint32_t nFullBufferReads = 0; // Number of full buffer reads in transmission
@@ -175,6 +177,7 @@ uint16_t usbBufferPos[2] = {0}; // Current position in each USB buffer (number o
 boolean usbBufferFlag = false; // True if new data is available in the current USB buffer
 
 void setup() {
+  AD.init();
   pinMode(DigitalPin1, OUTPUT);
   digitalWrite(DigitalPin1, LOW);
   #if HARDWARE_VERSION == 1
@@ -217,6 +220,9 @@ void setup() {
       AD.setOffset(i, 128+zeroCodeOffset[3]);
     }
   #endif 
+  for (int i = 0; i < nPhysicalChannels*2; i++) {
+    thresholdValue[i] = bitMax;
+  }
   timerPeriod = (1/(double)samplingRate)*1000000;
   hardwareTimer.begin(handler, timerPeriod); // hardwareTimer is an interval timer object - Teensy 3.6's hardware timer
 }
@@ -379,7 +385,7 @@ void handler(void) {
             SendEventsToStateMachine = (boolean)readByteFromSource(opSource);
           break;
         }
-        for (int i = 0; i < nPhysicalChannels; i++) {
+        for (int i = 0; i < nPhysicalChannels*2; i++) {
           eventEnabled[i] = true; // All channels start out enabled until first threshold crossing (though only eventChannels are evaluated)
         }
         if (opSource == 0) {
@@ -452,13 +458,13 @@ void handler(void) {
 
       case 'T': // Set thresholds and reset values
         if (opSource == 0) {
-          for (int i = 0; i < nPhysicalChannels; i++) { // Read in threshold values (in bits)
+          for (int i = 0; i < nPhysicalChannels*2; i++) { // Read in threshold values (in bits)
             thresholdValue[i] = USBCOM.readUint16();
           }
-          for (int i = 0; i < nPhysicalChannels; i++) { // Read in reset values (in bits)
+          for (int i = 0; i < nPhysicalChannels*2; i++) { // Read in reset values (in bits)
             resetValue[i] = USBCOM.readUint16();
           }
-          for (int i = 0; i < nPhysicalChannels; i++) { // Set sign of reset value with respect to threshold
+          for (int i = 0; i < nPhysicalChannels*2; i++) { // Set sign of reset value with respect to threshold
             if (resetValue[i] < thresholdValue[i]) {
               thresholdDirection[i] = 0;
             } else {
@@ -611,39 +617,42 @@ void handler(void) {
     }// end switch(opCode)
   }// end newOpCode
   
-  for (int i = 0; i < nActiveChannels; i++) { // Detect threshold crossings and send to targets
+  for (int i = 0; i < nActiveChannels; i++) { // Detect threshold crossings and send event bytes to targets
     #if HARDWARE_VERSION == 1
       AD.analogData.uint16[i] += zeroCodeOffset[voltageRanges[i]];
     #endif
     if (eventChannels[i]) { // If event reporting is enabled for this channel
-      thresholdEventDetected[i] = false;
-      if (eventEnabled[i]) { // Check for threshold crossing
-        if (thresholdDirection[i] == 0) { // If crossing is from low to high voltage
-          if (AD.analogData.uint16[i] >= thresholdValue[i]) {
-            thresholdEventDetected[i] = true;
+      for (int j = 0; j < 2; j++) {
+        byte thisEvent = j*8;
+        thresholdEventDetected[i+thisEvent] = false;
+        if (eventEnabled[i+thisEvent]) { // Check for threshold crossing
+          if (thresholdDirection[i+thisEvent] == 0) { // If crossing is from low to high voltage
+            if (AD.analogData.uint16[i] >= thresholdValue[i+thisEvent]) {
+              thresholdEventDetected[i+thisEvent] = true;
+            }
+          } else { // If crossing is from high to low voltage
+            if (AD.analogData.uint16[i] <= thresholdValue[i+thisEvent]) {
+              thresholdEventDetected[i+thisEvent] = true;
+            }
           }
-        } else { // If crossing is from high to low voltage
-          if (AD.analogData.uint16[i] <= thresholdValue[i]) {
-            thresholdEventDetected[i] = true;
+          if (thresholdEventDetected[i+thisEvent]) {
+            if (SendEventsToUSB) {
+              USBCOM.writeByte(i+1+thisEvent); // Convert to event code (event codes are indexed by 1)
+            }
+            if (SendEventsToStateMachine) {
+              StateMachineCOM.writeByte(i+1+thisEvent); // Convert to event code (indexed by 1)
+            }
+            eventEnabled[i+thisEvent] = false;
           }
-        }
-        if (thresholdEventDetected[i]) {
-          if (SendEventsToUSB) {
-            USBCOM.writeByte(i+1); // Convert to event code (event codes are indexed by 1)
-          }
-          if (SendEventsToStateMachine) {
-            StateMachineCOM.writeByte(i+1); // Convert to event code (indexed by 1)
-          }
-          eventEnabled[i] = false;
-        }
-      } else { // Check for re-enable
-        if (thresholdDirection[i] == 0) {
-          if (AD.analogData.uint16[i] <=  resetValue[i]) {
-            eventEnabled[i] = true;
-          }
-        } else {
-          if (AD.analogData.uint16[i] >=  resetValue[i]) {
-            eventEnabled[i] = true;
+        } else { // Check for re-enable
+          if (thresholdDirection[i+thisEvent] == 0) {
+            if (AD.analogData.uint16[i] <=  resetValue[i+thisEvent]) {
+              eventEnabled[i+thisEvent] = true;
+            }
+          } else {
+            if (AD.analogData.uint16[i] >=  resetValue[i+thisEvent]) {
+              eventEnabled[i+thisEvent] = true;
+            }
           }
         }
       }
@@ -761,6 +770,9 @@ void returnModuleInfo() {
   StateMachineCOM.writeUint32(FIRMWARE_VERSION); // 4-byte firmware version
   StateMachineCOM.writeByte(sizeof(moduleName)-1); // Length of module name
   StateMachineCOM.writeCharArray(moduleName, sizeof(moduleName)-1); // Module name
+  StateMachineCOM.writeByte(1); // 1 if more info follows, 0 if not
+  StateMachineCOM.writeByte('#'); // Op code for: Number of behavior events this module can generate
+  StateMachineCOM.writeByte(16); // 8 channels, 2 thresholds each
   if (fsmSupportsHwInfo) {
     StateMachineCOM.writeByte(1); // 1 if more info follows, 0 if not
     StateMachineCOM.writeByte('V'); // Op code for: Hardware major version

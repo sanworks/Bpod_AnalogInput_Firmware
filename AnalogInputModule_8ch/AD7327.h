@@ -34,6 +34,7 @@ public:
   void readADC();
   void setRange(byte channel, byte newRangeIndex);
   void setNchannels(byte nChannels);
+  void init();
   union {
     byte uint8[16];
     uint16_t uint16[8];

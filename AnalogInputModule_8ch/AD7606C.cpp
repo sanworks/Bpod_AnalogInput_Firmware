@@ -32,6 +32,9 @@ AD7606C::AD7606C(byte csPin_In, byte resetPin_In, byte convStartPin_In) {
   csPin = csPin_In;
   resetPin = resetPin_In;
   convStartPin = convStartPin_In;
+}
+
+void AD7606C::init() {
   pinMode(csPin, OUTPUT);
   pinMode(resetPin, OUTPUT);
   pinMode(convStartPin, OUTPUT);

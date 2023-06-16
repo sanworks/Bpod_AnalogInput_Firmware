@@ -36,6 +36,9 @@ int SPI_speed = 10000000;
 
 AD7327::AD7327(byte ADCChipSelect) {
   ChipSelect = ADCChipSelect;
+}
+
+void AD7327::init() {
   pinMode(ChipSelect, OUTPUT);
   digitalWrite(ChipSelect, HIGH);
   SPI.begin(); // Initialize SPI interface
