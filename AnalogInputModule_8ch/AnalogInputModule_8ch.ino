@@ -258,7 +258,7 @@ void loop() {
       while (sdBusy()) {}
       Serial.write(sdReadBuffer, sdReadBufferSize);
       if (throttleUSB) {
-        delayMicroseconds(500);
+        delayMicroseconds(1000);
       }    
     }
     if (nRemainderBytes > 0) {
