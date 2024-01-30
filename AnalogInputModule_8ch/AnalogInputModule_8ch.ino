@@ -77,8 +77,7 @@ ArCOM OutputStreamCOM(Serial2); // Creates an ArCOM object for the output stream
 byte StateMachineSerialBuf[192] = {0};
 
 // Digital i/o pins available from side of enclosure (not currently used; can be configured as an I2C interface)
-byte DigitalPin1 = 18;
-byte DigitalPin2 = 19;
+byte dioPins[2] = {18,19};
 
 // System objects
 IntervalTimer hardwareTimer; // Hardware timer to ensure even sampling
@@ -91,9 +90,11 @@ byte opSource = 0; // 0 = op from USB, 1 = op from UART1, 2 = op from UART2. Mor
 boolean newOpCode = 0; // this flag is true if an opCode was read from one of the ports
 byte OpMenuByte = 213; // This byte must be the first byte in any USB serial transmission. Reduces the probability of interference from port-scanning software
 byte inByte = 0; // General purpose temporary byte
+byte inByte2 = 0;
 
 // Channel counts
 const byte nPhysicalChannels = 8; // Number of physical channels on device
+const byte nDIOchannels = 2; // Number of physical DIO channels
 byte nActiveChannels = 8; // Number of channels currently being read (consecutive, starting at ch1)
 
 // State Flags
@@ -109,6 +110,8 @@ volatile boolean sd2USBflag = false; // True if data is in cue to be returned fr
 byte streamChan2Module[nPhysicalChannels] = {0}; // List of channels streaming to module
 byte streamChan2USB[nPhysicalChannels] = {0}; // List of channels streaming to USB
 byte voltageRanges[nPhysicalChannels] = {0}; // Voltage range indexes of channels
+byte dioConfig[nDIOchannels] = {0}; // Configuraiton of DIO channels. 0 = disabled / High Z. 1 = Output
+byte dioState[nDIOchannels] = {0}; // State of DIO channels. 0 = low, 1 = high
 uint32_t samplingRate = 1000; // in Hz 
 double timerPeriod = 0;
 
@@ -178,11 +181,10 @@ boolean usbBufferFlag = false; // True if new data is available in the current U
 
 void setup() {
   AD.init();
-  pinMode(DigitalPin1, OUTPUT);
-  digitalWrite(DigitalPin1, LOW);
   #if HARDWARE_VERSION == 1
-    pinMode(DigitalPin1, OUTPUT);
-    digitalWrite(DigitalPin1, HIGH); // This allows a potentiometer to be powered from the board, for coarse diagnostics. V2 has a 5V reference output for this.
+    pinMode(dioPins[0], OUTPUT);
+    dioConfig[0] = 1;
+    digitalWrite(dioPins[0], HIGH); // This allows a potentiometer to be powered from the board, for coarse diagnostics. V2 has a 5V reference output for this.
     Serial3.addMemoryForRead(StateMachineSerialBuf, 192);
     Serial3.begin(1312500);
   #else
@@ -566,6 +568,40 @@ void handler(void) {
              USBCOM.writeByte(memOK);
            }
         #endif
+      break;
+
+      case '-': // Set DIO channel type
+        inByte2 = 1; // set OK
+        for (int i = 0; i < nDIOchannels; i++) {
+          inByte = USBCOM.readByte();
+          switch (inByte) {
+            case 0:
+              pinMode(dioPins[i], INPUT);
+            break;
+            case 1:
+              pinMode(dioPins[i], OUTPUT);
+            break;
+            case 2:
+              pinMode(dioPins[i], INPUT_PULLUP);
+            break;
+            default:
+              inByte2 = 0;
+            break;
+          }
+          if (inByte2) {
+            dioConfig[i] = inByte;
+          }
+        }
+        USBCOM.writeByte(inByte2); // Send confirm byte
+      break;
+
+      case '=': // Set DIO pin configured as output
+        inByte = readByteFromSource(opSource);
+        inByte2 = readByteFromSource(opSource);
+        if (dioConfig[inByte] == 1) {
+          digitalWriteFast(dioPins[inByte], inByte2);
+          dioState[inByte] = inByte2;
+        }
       break;
 
       case 'X': // Disconnect from PC-side app
