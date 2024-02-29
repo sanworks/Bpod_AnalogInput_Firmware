@@ -29,10 +29,10 @@
 #include <SPI.h>
 #include "SdFat.h"
 
-#define FIRMWARE_VERSION 6
+#define FIRMWARE_VERSION 7
 
 // SETUP MACROS TO COMPILE FOR TARGET DEVICE:
-#define HARDWARE_VERSION 2 // Use: 1 = AIM rev 1.0-1.2 (as marked on PCB), 2 = AIM rev 2.0
+#define HARDWARE_VERSION 0 // Use: 1 = AIM rev 1.0-1.2 (as marked on PCB), 2 = AIM rev 2.0
 //-------------------------------------------
 
 // Validate macros
@@ -183,8 +183,9 @@ void setup() {
   AD.init();
   #if HARDWARE_VERSION == 1
     pinMode(dioPins[0], OUTPUT);
-    dioConfig[0] = 1;
     digitalWrite(dioPins[0], HIGH); // This allows a potentiometer to be powered from the board, for coarse diagnostics. V2 has a 5V reference output for this.
+    dioConfig[0] = 1; // Set DIO Ch0 as output
+    dioState[0] = 1; // Set DIO State variable of Ch0 to high
     Serial3.addMemoryForRead(StateMachineSerialBuf, 192);
     Serial3.begin(1312500);
   #else
@@ -580,9 +581,6 @@ void handler(void) {
             break;
             case 1:
               pinMode(dioPins[i], OUTPUT);
-            break;
-            case 2:
-              pinMode(dioPins[i], INPUT_PULLUP);
             break;
             default:
               inByte2 = 0;
